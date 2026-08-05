@@ -1,81 +1,45 @@
-/* Power Discipline v20 — weekday metrics and goal tracking overlay. */
+/* Power Discipline v21 — simple monthly plan and weekly fact updates. */
 (() => {
   'use strict';
-  const KEY = 'power-discipline-v18';
-  const $ = (s,r=document) => r.querySelector(s);
-  const $$ = (s,r=document) => [...r.querySelectorAll(s)];
-  const today = () => new Date().toISOString().slice(0,10);
-  const month = d => (d || today()).slice(0,7);
-  const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } };
-  const save = d => localStorage.setItem(KEY, JSON.stringify(d));
-  const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-  const isWorkday = date => { const n = new Date(date + 'T12:00:00').getDay(); return n > 0 && n < 6; };
-  const daysInMonth = m => new Date(+m.slice(0,4), +m.slice(5,7), 0).getDate();
-  const workdays = (m, through) => {
-    const last = Math.min(through || daysInMonth(m), daysInMonth(m)); let n=0;
-    for(let i=1;i<=last;i++) if(isWorkday(`${m}-${String(i).padStart(2,'0')}`)) n++;
-    return n;
-  };
-  const score = d => { const a=['focus','energy','action','recovery'].map(k=>Number(d?.metrics?.[k])).filter(v=>v>=1&&v<=10); return a.length?a.reduce((x,y)=>x+y,0)/a.length/10:null; };
-  const currentDays = d => (d.days||[]).filter(x=>month(x.date)===month() && x.date<=today() && isWorkday(x.date));
-  function migrate(d) {
-    d.goals = Array.isArray(d.goals) ? d.goals : [];
-    d.goals.forEach(g => { if(!g.type) g.type='accumulation'; if(!Number.isFinite(Number(g.plan)) || Number(g.plan)<=0) g.plan=1; if(!Number.isFinite(Number(g.fact))) g.fact=0; });
-    return d;
+  const KEY='power-discipline-v18';
+  const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+  const today=()=>new Date().toISOString().slice(0,10), month=()=>today().slice(0,7);
+  const read=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return{}}};
+  const save=d=>localStorage.setItem(KEY,JSON.stringify(d));
+  const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const id=()=>`g${Date.now().toString(36)}${Math.random().toString(36).slice(2,5)}`;
+  const isWorkday=s=>{const n=new Date(s+'T12:00:00').getDay();return n>0&&n<6};
+  const daysInMonth=m=>new Date(+m.slice(0,4),+m.slice(5,7),0).getDate();
+  function workdays(m,upto){let n=0,last=Math.min(upto||daysInMonth(m),daysInMonth(m));for(let i=1;i<=last;i++)if(isWorkday(`${m}-${String(i).padStart(2,'0')}`))n++;return n}
+  function state(){
+    const d=read(),m=month(); d.monthPlans=d.monthPlans&&typeof d.monthPlans==='object'?d.monthPlans:{};
+    if(!Array.isArray(d.monthPlans[m])) d.monthPlans[m]=(Array.isArray(d.goals)?d.goals:[]).slice(0,5).map(g=>({id:g.id||id(),name:g.name||'Цель',target:+g.plan||1,fact:+g.fact||0,unit:g.unit||''}));
+    d.monthPlans[m]=d.monthPlans[m].slice(0,5).map(g=>({id:g.id||id(),name:g.name||'Цель',target:Math.max(1,+g.target||+g.plan||1),fact:Math.max(0,+g.fact||0),unit:g.unit||''}));
+    d.goals=d.monthPlans[m].map(g=>({id:g.id,name:g.name,plan:g.target,fact:g.fact,unit:g.unit})); save(d); return d;
   }
-  function goalFact(g,d) {
-    if(g.type !== 'regular') return Number(g.fact)||0;
-    return currentDays(d).filter(x=>Number(x.g?.[g.id])===1).length;
+  function goals(d=state()){return d.monthPlans[month()]||[]}
+  function meta(g){const elapsed=workdays(month(),+today().slice(8)),total=workdays(month()),remaining=Math.max(0,total-elapsed),p=Math.min(1,g.fact/g.target),expected=total?elapsed/total:0,pace=expected?p/expected:null,left=Math.max(0,g.target-g.fact);return{p,pace,left,remaining,need:remaining?Math.ceil(left/remaining):0}}
+  function renderDashboard(){
+    const d=state(),gs=goals(d),list=$('#dashboard .goal-list'),panel=$('#dashboard .goal-panel'); if(!list||!panel)return;
+    const head=panel.querySelector('.panel-top'); if(head)head.innerHTML=`<div><div class="label">План месяца</div><b>Главные результаты на ${new Intl.DateTimeFormat('ru-RU',{month:'long'}).format(new Date(month()+'-01T12:00:00'))}</b></div><button class="button ghost pd-open-plan">Открыть план месяца</button>`;
+    list.innerHTML=gs.length?gs.map(g=>{const x=meta(g),pc=Math.round(x.p*100),pace=x.pace===null?'—':x.pace>=1?'В темпе':'Ниже темпа';const need=x.remaining?`Осталось ${x.left.toLocaleString('ru-RU')} ${esc(g.unit)} · нужно ${x.need.toLocaleString('ru-RU')} ${esc(g.unit)} / раб. день`:'Период завершён';return `<div class="goal-row pd-simple-goal"><div class="goal-name">${esc(g.name)}<div class="progress"><span style="width:${pc}%"></span></div><small>${need}</small></div><div class="goal-num"><b>${pc}%</b>${pace}</div><div class="goal-num"><b>${g.fact.toLocaleString('ru-RU')} / ${g.target.toLocaleString('ru-RU')}</b>${esc(g.unit)}</div><button class="button ghost pd-update-fact" data-id="${g.id}">Обновить факт</button></div>`}).join(''):'<div class="empty">На этот месяц пока нет целей. Откройте «План месяца».</div>';
+    const cards=$$('#dashboard .grid .card');const paces=gs.map(g=>meta(g).pace).filter(Number.isFinite),pace=paces.length?paces.reduce((a,b)=>a+b,0)/paces.length:null;
+    if(cards[2]){cards[2].querySelector('.metric').textContent=pace===null?'—':Math.round(pace*100)+'%';cards[2].querySelector('.note').textContent='Темп целей относительно прошедших рабочих дней'}
+    $$('.pd-open-plan').forEach(b=>b.onclick=openPlan);$$('.pd-update-fact').forEach(b=>b.onclick=()=>openFact(b.dataset.id));
   }
-  function progress(g,d) { return Math.max(0,Math.min(1,goalFact(g,d)/(Number(g.plan)||1))); }
-  function goalMeta(g,d) {
-    const fact=goalFact(g,d), plan=Number(g.plan)||1, p=progress(g,d), m=month();
-    const elapsed=workdays(m,+today().slice(8,10)), total=workdays(m), expected=total?elapsed/total:0;
-    const pace=expected ? p/expected : null, left=Math.max(0,plan-fact), remaining=Math.max(0,total-elapsed);
-    let detail='';
-    if(g.type==='regular') detail=`${fact} из ${plan} рабочих отметок`;
-    else if(g.type==='project') detail=`${Math.round(fact)}% из 100%`;
-    else detail=`${Number(fact).toLocaleString('ru-RU')} из ${Number(plan).toLocaleString('ru-RU')} ${esc(g.unit||'')}`;
-    const need=(g.type==='accumulation'||g.type==='number') && remaining>0 ? `Нужно: ${Math.ceil(left/remaining).toLocaleString('ru-RU')} ${esc(g.unit||'')} / раб. день` : remaining===0 ? 'Период завершён' : `Осталось: ${left.toLocaleString('ru-RU')} ${esc(g.unit||'')}`;
-    return {fact,plan,p,pace,detail,need};
+  function ensurePlanTab(){const nav=$('#nav');if(nav&&!nav.querySelector('[data-pd-plan]'))nav.insertAdjacentHTML('beforeend','<button data-pd-plan>План месяца</button>')}
+  function openPlan(){
+    const d=state(),m=month(); $$('.tab').forEach(x=>x.classList.remove('active')); let tab=$('#pd-plan');if(!tab){tab=document.createElement('section');tab.id='pd-plan';tab.className='tab';document.querySelector('main.wrap').insertBefore(tab,$('.footer'))}tab.classList.add('active');$$('#nav button').forEach(b=>b.classList.toggle('active',!!b.dataset.pdPlan));
+    tab.innerHTML=`<div class="hero"><div><div class="eyebrow">Планирование</div><h1>Мой месяц.</h1><p>Задайте до пяти измеримых результатов в начале месяца. В течение месяца обновляйте только фактические значения — например, раз в неделю.</p></div><button class="button" id="pd-save-plan">Сохранить план</button></div><div class="pd-plan-note">${new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(new Date(m+'-01T12:00:00'))} · рабочие дни учитываются автоматически</div><div id="pd-plan-rows">${goals(d).map(row).join('')}</div><button class="button ghost" id="pd-add-goal" ${goals(d).length>=5?'disabled':''}>+ Добавить цель</button><p class="note" style="margin-top:12px">Лимит — 5 целей. «Отметка дня» не меняет цифры целей: она показывает состояние и привычки. Факт обновляйте здесь или кнопкой на дашборде.</p>`;
+    $('#pd-add-goal')?.addEventListener('click',()=>{const box=$('#pd-plan-rows');if($$('.pd-plan-row',box).length<5){box.insertAdjacentHTML('beforeend',row({id:id(),name:'',target:'',fact:'',unit:''}));if($$('.pd-plan-row',box).length===5)$('#pd-add-goal').disabled=true}});
+    $('#pd-save-plan').onclick=savePlan;$$('.pd-remove-goal').forEach(b=>b.onclick=()=>{b.closest('.pd-plan-row').remove();$('#pd-add-goal').disabled=$$('.pd-plan-row').length>=5});
   }
-  function typeName(t) { return ({accumulation:'Накопительная',number:'Числовая',regular:'Регулярность',project:'Проект'})[t]||'Накопительная'; }
-  function editGoal(id) {
-    const d=migrate(read()), old=d.goals.find(g=>g.id===id), name=prompt('Название цели',old?.name||''); if(!name?.trim())return;
-    const type=prompt('Тип: accumulation — доход/накопление; number — числовая; regular — регулярность; project — проект',old?.type||'accumulation');
-    if(!['accumulation','number','regular','project'].includes(type)) { alert('Выберите один из указанных типов.'); return; }
-    const defaultPlan=type==='project' ? 100 : (old?.plan||'');
-    const plan=Number(prompt(type==='regular'?'Сколько рабочих отметок нужно в этом месяце?':type==='project'?'Целевой процент (обычно 100)':type==='accumulation'?'Цель на текущий месяц':'Целевое значение',defaultPlan));
-    if(!Number.isFinite(plan)||plan<=0)return;
-    let fact=old?.fact||0;
-    if(type!=='regular') { fact=Number(prompt(type==='project'?'Текущий процент выполнения':'Текущий факт',fact)); if(!Number.isFinite(fact)) fact=0; }
-    const unit=type==='regular' ? 'рабочих отметок' : (prompt('Единица измерения',old?.unit||'')??'');
-    const g={id:old?.id||('g'+Date.now().toString(36)),name:name.trim(),type,plan,fact,unit};
-    if(old) Object.assign(old,g); else d.goals.push(g); save(d); setTimeout(patch,0);
-  }
-  function goalsHtml(d) {
-    if(!d.goals.length) return '<div class="empty">Добавьте первую цель</div>';
-    return d.goals.map(g=>{const x=goalMeta(g,d), pc=Math.round(x.p*100), tempo=x.pace===null?'—':`${Math.round(x.pace*100)}% от планового темпа`;
-      return `<div class="goal-row"><div class="goal-name">${esc(g.name)} <small style="color:#7b87a1;font-weight:700">· ${typeName(g.type)}</small><div class="progress"><span style="width:${pc}%"></span></div><small style="color:#7b87a1">${x.need}</small></div><div class="goal-num"><b>${pc}%</b>${tempo}</div><div class="goal-num"><b>${x.detail}</b></div><button class="button ghost pd-edit-goal" data-id="${g.id}">Изменить</button></div>`;
-    }).join('');
-  }
-  function patch() {
-    const d=migrate(read()); save(d);
-    const ds=currentDays(d), scored=ds.map(score).filter(v=>v!==null), disc=scored.length?scored.reduce((a,b)=>a+b,0)/scored.length:null;
-    const cards=$$('#dashboard .grid .card');
-    if(cards[0]) { cards[0].querySelector('.metric').textContent=disc===null?'—':Math.round(disc*100)+'%'; cards[0].querySelector('.note').textContent=`Среднее по четырём факторам за ${scored.length} рабочих дней`; }
-    const paces=d.goals.map(g=>goalMeta(g,d).pace).filter(Number.isFinite), pace=paces.length?paces.reduce((a,b)=>a+b,0)/paces.length:null;
-    if(cards[2]) { cards[2].querySelector('.metric').textContent=pace===null?'—':Math.round(pace*100)+'%'; cards[2].querySelector('.note').textContent='Факт относительно плана на прошедшие рабочие дни'; }
-    const list=$('#dashboard .goal-list'); if(list) list.innerHTML=goalsHtml(d);
-    $$('.pd-edit-goal').forEach(b=>b.onclick=()=>editGoal(b.dataset.id));
-    const add=$('#dashboard #addGoal'); if(add) add.onclick=()=>editGoal();
-    const weekly=$('#dashboard .analysis-grid')?.previousElementSibling?.querySelector('p'); if(weekly) weekly.textContent='Средние оценки за последние семь заполненных рабочих дней. Выходные не влияют на результат.';
-  }
-  document.addEventListener('click',e=>{
-    if(e.target.closest('#saveDay')) setTimeout(patch,120);
-    if(e.target.closest('[data-tab], .editGoal, #addGoal')) setTimeout(patch,120);
-  },true);
-  const style=document.createElement('style');
-  style.textContent='.goal-name small{display:block;margin-top:5px}.goal-row{align-items:center}.goal-row small{font-size:11px}.pd-goal-help{color:#7b87a1;font-size:12px}'; document.head.append(style);
-  patch(); setTimeout(patch,250);
+  function row(g){return `<div class="panel pd-plan-row" data-id="${g.id}"><div class="form-grid"><div class="field"><label>Цель</label><input data-f="name" value="${esc(g.name)}" placeholder="Например: Личный доход"></div><div class="field"><label>Результат к концу месяца</label><input data-f="target" type="number" min="1" value="${g.target}" placeholder="300000"></div><div class="field"><label>Текущий факт</label><input data-f="fact" type="number" min="0" value="${g.fact}" placeholder="0"></div><div class="field"><label>Единица</label><input data-f="unit" value="${esc(g.unit)}" placeholder="₽, публикаций, кг"></div></div><button class="button ghost danger pd-remove-goal">Удалить</button></div>`}
+  function savePlan(){const d=state(),m=month(),gs=$$('.pd-plan-row').map(r=>({id:r.dataset.id||id(),name:$('[data-f="name"]',r).value.trim(),target:+$('[data-f="target"]',r).value,fact:+$('[data-f="fact"]',r).value||0,unit:$('[data-f="unit"]',r).value.trim()})).filter(g=>g.name&&g.target>0).slice(0,5);d.monthPlans[m]=gs;d.goals=gs.map(g=>({id:g.id,name:g.name,plan:g.target,fact:g.fact,unit:g.unit}));save(d);alert('План месяца сохранён');openDashboard()}
+  function openFact(goalId){const d=state(),g=goals(d).find(x=>x.id===goalId);if(!g)return;const value=prompt(`Обновить факт: ${g.name}\nЦель на месяц: ${g.target.toLocaleString('ru-RU')} ${g.unit}`,g.fact);if(value===null)return;const n=Number(value);if(!Number.isFinite(n)||n<0){alert('Введите число от нуля и выше.');return}g.fact=n;d.goals=d.monthPlans[month()].map(x=>({id:x.id,name:x.name,plan:x.target,fact:x.fact,unit:x.unit}));save(d);renderDashboard()}
+  function openDashboard(){const b=$('[data-tab="dashboard"]');if(b)b.click();setTimeout(renderDashboard,80)}
+  function boot(){state();ensurePlanTab();renderDashboard()}
+  document.addEventListener('click',e=>{if(e.target.closest('[data-pd-plan]')){e.preventDefault();openPlan()}if(e.target.closest('[data-tab]'))setTimeout(boot,90);if(e.target.closest('#saveDay'))setTimeout(boot,130)},true);
+  const css=document.createElement('style');css.textContent='.pd-simple-goal small{display:block;margin-top:6px;color:#7b87a1;font-weight:500;font-size:11px}.pd-plan-note{margin:0 0 14px;padding:12px 14px;border:1px solid #dce5ff;border-radius:12px;background:#f5f7ff;color:#657391;font-weight:700}.pd-plan-row{margin:12px 0;padding:16px}.pd-plan-row .danger{margin-top:12px}.pd-plan-row .form-grid{grid-template-columns:2fr 1fr 1fr .8fr}.pd-plan-row input{height:42px}@media(max-width:850px){.pd-plan-row .form-grid{grid-template-columns:1fr 1fr}}@media(max-width:530px){.pd-plan-row .form-grid{grid-template-columns:1fr}}';document.head.append(css);
+  boot();setTimeout(boot,250);
 })();
