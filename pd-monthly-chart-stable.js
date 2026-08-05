@@ -1,44 +1,81 @@
-/* Stable monthly chart: replaces pd-monthly-chart.js. No MutationObserver. */
+/* Power Discipline v20 — weekday metrics and goal tracking overlay. */
 (() => {
   'use strict';
   const KEY = 'power-discipline-v18';
-  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-  const $ = (s, r = document) => r.querySelector(s);
-  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
-  const data = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } };
-  const score = d => { const a = ['focus','energy','action','recovery'].map(k => Number(d?.metrics?.[k])).filter(v => v >= 1 && v <= 10); return a.length ? avg(a) / 10 : null; };
-  const label = m => new Intl.DateTimeFormat('ru-RU',{month:'short'}).format(new Date(m + '-01T12:00:00')).replace('.','');
-  const meta = {discipline:['Индекс дисциплины','#627fee','Показывает качество состояния по четырём факторам'],habits:['Привычки','#35ae91','Показывает устойчивость активных привычек'],goals:['Цели','#cf6f8a','Показывает средний прогресс активных целей']};
-  function series() {
-    const d = data(), now = new Date().toISOString().slice(0,7);
-    const days = (d.days || []).filter(x => x.date?.slice(0,7) === now && score(x) !== null);
-    const habits = (d.habits || []).map(h => avg(days.map(x => Number(x.h?.[h.id])).filter(Number.isFinite))).filter(Number.isFinite);
-    const goals = (d.goals || []).map(g => Math.max(0,Math.min(1,(Number(g.fact)||0)/(Number(g.plan)||1))));
-    const current = {month:now, discipline:avg(days.map(score).filter(v => v !== null)), habits:avg(habits), goals:avg(goals)};
-    return [...(d.monthSnapshots || []).filter(x => x.month !== now), current].sort((a,b) => a.month.localeCompare(b.month)).slice(-8);
+  const $ = (s,r=document) => r.querySelector(s);
+  const $$ = (s,r=document) => [...r.querySelectorAll(s)];
+  const today = () => new Date().toISOString().slice(0,10);
+  const month = d => (d || today()).slice(0,7);
+  const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { return {}; } };
+  const save = d => localStorage.setItem(KEY, JSON.stringify(d));
+  const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const isWorkday = date => { const n = new Date(date + 'T12:00:00').getDay(); return n > 0 && n < 6; };
+  const daysInMonth = m => new Date(+m.slice(0,4), +m.slice(5,7), 0).getDate();
+  const workdays = (m, through) => {
+    const last = Math.min(through || daysInMonth(m), daysInMonth(m)); let n=0;
+    for(let i=1;i<=last;i++) if(isWorkday(`${m}-${String(i).padStart(2,'0')}`)) n++;
+    return n;
+  };
+  const score = d => { const a=['focus','energy','action','recovery'].map(k=>Number(d?.metrics?.[k])).filter(v=>v>=1&&v<=10); return a.length?a.reduce((x,y)=>x+y,0)/a.length/10:null; };
+  const currentDays = d => (d.days||[]).filter(x=>month(x.date)===month() && x.date<=today() && isWorkday(x.date));
+  function migrate(d) {
+    d.goals = Array.isArray(d.goals) ? d.goals : [];
+    d.goals.forEach(g => { if(!g.type) g.type='accumulation'; if(!Number.isFinite(Number(g.plan)) || Number(g.plan)<=0) g.plan=1; if(!Number.isFinite(Number(g.fact))) g.fact=0; });
+    return d;
   }
-  const css = document.createElement('style');
-  css.textContent = '.pdchart{padding:19px 22px 20px}.pdchart-head{display:flex;justify-content:space-between;gap:16px;margin-bottom:18px}.pdchart-title{font-size:16px;font-weight:900}.pdchart-sub{font-size:12px;color:#7b87a1;margin-top:3px}.pdchart-value{text-align:right}.pdchart-value b{font-size:25px}.pdchart-value span{display:block;font-size:11px;font-weight:800;color:#6d7b99}.pdchart-tabs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:15px}.pdchart-tabs button{font:inherit;font-size:11px;font-weight:850;color:#71809f;border:1px solid #e1e7f5;background:#fff;padding:7px 10px;border-radius:999px;cursor:pointer}.pdchart-tabs .on{background:#f3f6ff;color:#34446b;border-color:#cfdafa}.pdchart-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}.pdchart-canvas{height:205px;width:100%}.pdchart-canvas svg{display:block}.pdchart-grid{stroke:#e9eef9;stroke-dasharray:3 6}.pdchart-label{fill:#95a1ba;font-size:10px;font-weight:800}.pdchart-point{fill:#fff;stroke-width:3}.pdchart-hint{margin-top:10px;padding:10px 12px;border-radius:10px;background:#f7f9ff;color:#687694;font-size:12px}@media(max-width:550px){.pdchart{padding:16px}.pdchart-head{display:block}.pdchart-value{text-align:left;margin-top:10px}}';
-  document.head.append(css);
-  function svg(key, w) {
-    const s = series(), [name,color] = meta[key], h=205,l=34,r=14,t=10,b=30,n=s.length;
-    if (!s.some(x => Number.isFinite(x[key]))) return '<div class="pdchart-hint">Появится после первой заполненной отметки.</div>';
-    const x=i=>l+(w-l-r)*(n===1?.5:i/(n-1)), y=v=>t+(h-t-b)*(1-(Number.isFinite(v)?v:0));
-    const pts=s.map((d,i)=>`${x(i)},${y(d[key])}`).join(' '), area=`${l},${h-b} ${pts} ${w-r},${h-b}`;
-    const grids=[0,.25,.5,.75,1].map(v=>`<line class="pdchart-grid" x1="${l}" x2="${w-r}" y1="${y(v)}" y2="${y(v)}"/><text class="pdchart-label" x="0" y="${y(v)+4}">${Math.round(v*100)}%</text>`).join('');
-    const points=s.map((d,i)=>`<circle class="pdchart-point" cx="${x(i)}" cy="${y(d[key])}" r="4" stroke="${color}"><title>${label(d.month)}: ${Math.round((d[key]||0)*100)}%</title></circle><text class="pdchart-label" x="${x(i)}" y="${h-7}" text-anchor="middle">${label(d.month)}</text>`).join('');
-    return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-label="${name} по месяцам"><defs><linearGradient id="pd-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".22"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>${grids}<polygon points="${area}" fill="url(#pd-fill)"/><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>${points}</svg>`;
+  function goalFact(g,d) {
+    if(g.type !== 'regular') return Number(g.fact)||0;
+    return currentDays(d).filter(x=>Number(x.g?.[g.id])===1).length;
   }
-  function render(host, key = host.dataset.metric || 'discipline') {
-    host.dataset.metric = key;
-    const s=series(), [name,color,hint]=meta[key], cur=s.at(-1)?.[key] || 0, prev=s.length>1?s.at(-2)?.[key]:null, delta=Number.isFinite(prev)?`${Math.round((cur-prev)*100)>=0?'+':''}${Math.round((cur-prev)*100)} п.п.`:'—';
-    host.innerHTML=`<div class="pdchart-head"><div><div class="pdchart-title">${name}</div><div class="pdchart-sub">${hint}</div></div><div class="pdchart-value"><b>${Math.round(cur*100)}%</b><span>к прошлому периоду: ${delta}</span></div></div><div class="pdchart-tabs">${Object.entries(meta).map(([k,v])=>`<button class="${k===key?'on':''}" data-pdmetric="${k}"><i class="pdchart-dot" style="background:${v[1]}"></i>${v[0]}</button>`).join('')}</div><div class="pdchart-canvas"></div><div class="pdchart-hint">Нажмите на показатель, чтобы увидеть его траекторию отдельно — без наложения несвязанных линий.</div>`;
-    host.onclick=e=>{const b=e.target.closest('[data-pdmetric]');if(b)render(host,b.dataset.pdmetric)};
-    requestAnimationFrame(()=>draw(host));
+  function progress(g,d) { return Math.max(0,Math.min(1,goalFact(g,d)/(Number(g.plan)||1))); }
+  function goalMeta(g,d) {
+    const fact=goalFact(g,d), plan=Number(g.plan)||1, p=progress(g,d), m=month();
+    const elapsed=workdays(m,+today().slice(8,10)), total=workdays(m), expected=total?elapsed/total:0;
+    const pace=expected ? p/expected : null, left=Math.max(0,plan-fact), remaining=Math.max(0,total-elapsed);
+    let detail='';
+    if(g.type==='regular') detail=`${fact} из ${plan} рабочих отметок`;
+    else if(g.type==='project') detail=`${Math.round(fact)}% из 100%`;
+    else detail=`${Number(fact).toLocaleString('ru-RU')} из ${Number(plan).toLocaleString('ru-RU')} ${esc(g.unit||'')}`;
+    const need=(g.type==='accumulation'||g.type==='number') && remaining>0 ? `Нужно: ${Math.ceil(left/remaining).toLocaleString('ru-RU')} ${esc(g.unit||'')} / раб. день` : remaining===0 ? 'Период завершён' : `Осталось: ${left.toLocaleString('ru-RU')} ${esc(g.unit||'')}`;
+    return {fact,plan,p,pace,detail,need};
   }
-  function draw(host) { const c=$('.pdchart-canvas',host); if(!c || host.offsetParent===null)return; const w=Math.round(c.getBoundingClientRect().width); if(w>80)c.innerHTML=svg(host.dataset.metric,w); }
-  function upgrade() { $$('.chart-wrap').filter(x=>x.offsetParent!==null).forEach(old=>{const host=document.createElement('div');host.className='pdchart';old.replaceWith(host);const foot=host.nextElementSibling;if(foot?.classList.contains('chart-footer'))foot.remove();render(host);}); $$('.pdchart').filter(x=>x.offsetParent!==null).forEach(draw); }
-  upgrade();
-  document.addEventListener('click',()=>setTimeout(upgrade,80),true);
-  window.addEventListener('resize',()=>$$('.pdchart').forEach(draw));
+  function typeName(t) { return ({accumulation:'Накопительная',number:'Числовая',regular:'Регулярность',project:'Проект'})[t]||'Накопительная'; }
+  function editGoal(id) {
+    const d=migrate(read()), old=d.goals.find(g=>g.id===id), name=prompt('Название цели',old?.name||''); if(!name?.trim())return;
+    const type=prompt('Тип: accumulation — доход/накопление; number — числовая; regular — регулярность; project — проект',old?.type||'accumulation');
+    if(!['accumulation','number','regular','project'].includes(type)) { alert('Выберите один из указанных типов.'); return; }
+    const defaultPlan=type==='project' ? 100 : (old?.plan||'');
+    const plan=Number(prompt(type==='regular'?'Сколько рабочих отметок нужно в этом месяце?':type==='project'?'Целевой процент (обычно 100)':type==='accumulation'?'Цель на текущий месяц':'Целевое значение',defaultPlan));
+    if(!Number.isFinite(plan)||plan<=0)return;
+    let fact=old?.fact||0;
+    if(type!=='regular') { fact=Number(prompt(type==='project'?'Текущий процент выполнения':'Текущий факт',fact)); if(!Number.isFinite(fact)) fact=0; }
+    const unit=type==='regular' ? 'рабочих отметок' : (prompt('Единица измерения',old?.unit||'')??'');
+    const g={id:old?.id||('g'+Date.now().toString(36)),name:name.trim(),type,plan,fact,unit};
+    if(old) Object.assign(old,g); else d.goals.push(g); save(d); setTimeout(patch,0);
+  }
+  function goalsHtml(d) {
+    if(!d.goals.length) return '<div class="empty">Добавьте первую цель</div>';
+    return d.goals.map(g=>{const x=goalMeta(g,d), pc=Math.round(x.p*100), tempo=x.pace===null?'—':`${Math.round(x.pace*100)}% от планового темпа`;
+      return `<div class="goal-row"><div class="goal-name">${esc(g.name)} <small style="color:#7b87a1;font-weight:700">· ${typeName(g.type)}</small><div class="progress"><span style="width:${pc}%"></span></div><small style="color:#7b87a1">${x.need}</small></div><div class="goal-num"><b>${pc}%</b>${tempo}</div><div class="goal-num"><b>${x.detail}</b></div><button class="button ghost pd-edit-goal" data-id="${g.id}">Изменить</button></div>`;
+    }).join('');
+  }
+  function patch() {
+    const d=migrate(read()); save(d);
+    const ds=currentDays(d), scored=ds.map(score).filter(v=>v!==null), disc=scored.length?scored.reduce((a,b)=>a+b,0)/scored.length:null;
+    const cards=$$('#dashboard .grid .card');
+    if(cards[0]) { cards[0].querySelector('.metric').textContent=disc===null?'—':Math.round(disc*100)+'%'; cards[0].querySelector('.note').textContent=`Среднее по четырём факторам за ${scored.length} рабочих дней`; }
+    const paces=d.goals.map(g=>goalMeta(g,d).pace).filter(Number.isFinite), pace=paces.length?paces.reduce((a,b)=>a+b,0)/paces.length:null;
+    if(cards[2]) { cards[2].querySelector('.metric').textContent=pace===null?'—':Math.round(pace*100)+'%'; cards[2].querySelector('.note').textContent='Факт относительно плана на прошедшие рабочие дни'; }
+    const list=$('#dashboard .goal-list'); if(list) list.innerHTML=goalsHtml(d);
+    $$('.pd-edit-goal').forEach(b=>b.onclick=()=>editGoal(b.dataset.id));
+    const add=$('#dashboard #addGoal'); if(add) add.onclick=()=>editGoal();
+    const weekly=$('#dashboard .analysis-grid')?.previousElementSibling?.querySelector('p'); if(weekly) weekly.textContent='Средние оценки за последние семь заполненных рабочих дней. Выходные не влияют на результат.';
+  }
+  document.addEventListener('click',e=>{
+    if(e.target.closest('#saveDay')) setTimeout(patch,120);
+    if(e.target.closest('[data-tab], .editGoal, #addGoal')) setTimeout(patch,120);
+  },true);
+  const style=document.createElement('style');
+  style.textContent='.goal-name small{display:block;margin-top:5px}.goal-row{align-items:center}.goal-row small{font-size:11px}.pd-goal-help{color:#7b87a1;font-size:12px}'; document.head.append(style);
+  patch(); setTimeout(patch,250);
 })();
